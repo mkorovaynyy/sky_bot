@@ -31,10 +31,11 @@ public class NotificationScheduler {
     @Scheduled(cron = "0 * * * * *")
     public void checkNotifications() {
         try {
+            // Исправление: точное сравнение времени
             LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MINUTES);
             processNotificationsForTime(now);
         } catch (Exception e) {
-            logger.error("Критическая ошибка в шедулере", e);
+            logger.error("Ошибка в шедулере", e);
         }
     }
 

@@ -26,14 +26,16 @@ public class TelegramBotUpdatesListener implements UpdatesListener {
     private final TelegramBot telegramBot;
     private final NotificationTaskRepository repository;
 
+    @Value("${spring.datasource.username}")
+    private String dbUser;
+
     private static final Pattern TASK_PATTERN =
             Pattern.compile("(\\d{1,2}\\.\\d{1,2}\\.\\d{4} \\d{1,2}:\\d{2})\\s+(.+)");
 
     private static final DateTimeFormatter FORMATTER =
             DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
 
-    @Value("${spring.datasource.username}")
-    private String dbUser;
+
 
     @Autowired
     public TelegramBotUpdatesListener(
