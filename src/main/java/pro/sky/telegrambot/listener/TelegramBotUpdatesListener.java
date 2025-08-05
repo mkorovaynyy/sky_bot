@@ -7,6 +7,7 @@ import com.pengrad.telegrambot.request.SendMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import pro.sky.telegrambot.model.NotificationTask;
 import pro.sky.telegrambot.repository.NotificationTaskRepository;
@@ -31,6 +32,9 @@ public class TelegramBotUpdatesListener implements UpdatesListener {
     private static final DateTimeFormatter FORMATTER =
             DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
 
+    @Value("${spring.datasource.username}")
+    private String dbUser;
+
     @Autowired
     public TelegramBotUpdatesListener(
             TelegramBot telegramBot,
@@ -47,32 +51,72 @@ public class TelegramBotUpdatesListener implements UpdatesListener {
 
     @Override
     public int process(List<Update> updates) {
-        updates.forEach(update -> {
-            if (update.message() != null && update.message().text() != null) {
-                String text = update.message().text();
-                Long chatId = update.message().chat().id();
+        try {
+            updates.forEach(this::processUpdate);
+            return UpdatesListener.CONFIRMED_UPDATES_ALL;
+        } catch (Exception e) {
+            logger.error("Ошибка обработки обновлений", e);
+            return UpdatesListener.CONFIRMED_UPDATES_NONE;
+        }
+    }
 
-                if ("/start".equalsIgnoreCase(text)) {
-                    sendResponse(chatId, "👋 Привет! Я бот-напоминалка.\n\n" +
-                            "📝 Отправь задачу в формате:\n" +
-                            "01.01.2025 12:00 Сделать домашку");
-                } else {
-                    Matcher matcher = TASK_PATTERN.matcher(text);
-                    if (matcher.matches()) {
-                        processTask(matcher, chatId);
-                    } else {
-                        sendResponse(chatId, "❌ Неверный формат сообщения.\n\n" +
-                                "✅ Используй:\n" +
-                                "<b>01.01.2025 12:00 Текст напоминания</b>\n\n" +
-                                "Где:\n" +
-                                "• 01.01.2025 - дата\n" +
-                                "• 12:00 - время\n" +
-                                "• Текст напоминания - ваше сообщение", true);
-                    }
-                }
-            }
-        });
-        return UpdatesListener.CONFIRMED_UPDATES_ALL;
+    private void processUpdate(Update update) {
+        if (update.message() == null || update.message().text() == null) {
+            return;
+        }
+
+        String text = update.message().text();
+        Long chatId = update.message().chat().id();
+
+        if ("/start".equalsIgnoreCase(text)) {
+            sendWelcomeMessage(chatId);
+        } else if ("/dbinfo".equalsIgnoreCase(text)) {
+            sendDbInfo(chatId);
+        } else {
+            processTaskMessage(text, chatId);
+        }
+    }
+
+    private void sendWelcomeMessage(Long chatId) {
+        String message = "👋 Привет! Я бот-напоминалка.\n\n" +
+                "📝 Отправь задачу в формате:\n" +
+                "01.01.2025 12:00 Сделать домашку\n\n" +
+                "ℹ️ Используй /dbinfo для проверки подключения к БД";
+        sendResponse(chatId, message);
+    }
+
+    private void sendDbInfo(Long chatId) {
+        try {
+            long count = repository.count();
+            String status = "✅ Подключение к БД активно\n" +
+                    "📊 Записей в БД: " + count + "\n" +
+                    "👤 Пользователь БД: " + dbUser;
+            sendResponse(chatId, status);
+        } catch (Exception e) {
+            String error = "❌ Ошибка подключения к БД: " + e.getMessage();
+            sendResponse(chatId, error);
+            logger.error("Ошибка проверки БД", e);
+        }
+    }
+
+    private void processTaskMessage(String text, Long chatId) {
+        Matcher matcher = TASK_PATTERN.matcher(text);
+        if (matcher.matches()) {
+            processTask(matcher, chatId);
+        } else {
+            sendInvalidFormatMessage(chatId);
+        }
+    }
+
+    private void sendInvalidFormatMessage(Long chatId) {
+        String message = "❌ Неверный формат сообщения.\n\n" +
+                "✅ Используй:\n" +
+                "<b>01.01.2025 12:00 Текст напоминания</b>\n\n" +
+                "Где:\n" +
+                "• 01.01.2025 - дата\n" +
+                "• 12:00 - время\n" +
+                "• Текст напоминания - ваше сообщение";
+        sendResponse(chatId, message, true);
     }
 
     private void processTask(Matcher matcher, Long chatId) {
@@ -82,27 +126,39 @@ public class TelegramBotUpdatesListener implements UpdatesListener {
         try {
             LocalDateTime dateTime = LocalDateTime.parse(dateTimeStr, FORMATTER);
 
-            // Проверка что дата в будущем
             if (dateTime.isBefore(LocalDateTime.now())) {
                 sendResponse(chatId, "⏰ Ошибка: указанная дата уже прошла");
                 return;
             }
 
-            NotificationTask task = new NotificationTask();
-            task.setChatId(chatId);
-            task.setMessage(taskText);
-            task.setNotificationDateTime(dateTime);
-            repository.save(task);
-
-            sendResponse(chatId, "✅ <b>Напоминание создано!</b>\n\n" +
-                    "📝 Текст: " + taskText + "\n" +
-                    "⏰ Дата: " + dateTimeStr, true);
+            saveNotificationTask(chatId, taskText, dateTime, dateTimeStr);
         } catch (DateTimeParseException e) {
-            logger.error("Ошибка парсинга даты: {}", dateTimeStr, e);
-            sendResponse(chatId, "❌ Ошибка формата даты.\n\n" +
-                    "✅ Используй формат: <b>дд.мм.гггг чч:мм</b>\n" +
-                    "Например: 01.01.2025 12:00", true);
+            handleDateParseError(chatId, dateTimeStr, e);
+        } catch (Exception e) {
+            logger.error("Ошибка сохранения задачи", e);
+            sendResponse(chatId, "❌ Ошибка сервера при сохранении напоминания");
         }
+    }
+
+    private void saveNotificationTask(Long chatId, String taskText, LocalDateTime dateTime, String dateTimeStr) {
+        NotificationTask task = new NotificationTask();
+        task.setChatId(chatId);
+        task.setMessage(taskText);
+        task.setNotificationDateTime(dateTime);
+        repository.save(task);
+
+        String message = "✅ <b>Напоминание создано!</b>\n\n" +
+                "📝 Текст: " + taskText + "\n" +
+                "⏰ Дата: " + dateTimeStr;
+        sendResponse(chatId, message, true);
+    }
+
+    private void handleDateParseError(Long chatId, String dateTimeStr, Exception e) {
+        logger.error("Ошибка парсинга даты: {}", dateTimeStr, e);
+        String message = "❌ Ошибка формата даты.\n\n" +
+                "✅ Используй формат: <b>дд.мм.гггг чч:мм</b>\n" +
+                "Пример: 01.01.2025 12:00";
+        sendResponse(chatId, message, true);
     }
 
     private void sendResponse(Long chatId, String text) {

@@ -7,7 +7,7 @@ END IF;
 END $$;
 
 -- Переключение на созданную БД
-c notification_db
+\c notification_db
 
 -- Создание пользователя, если не существует
 DO $$
