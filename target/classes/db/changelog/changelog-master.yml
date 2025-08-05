@@ -1,0 +1,57 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0
+      author: mkorovaynyy
+      changes:
+        - sql:
+            sql: |
+              CREATE DATABASE IF NOT EXISTS ${targetDatabase};
+            splitStatements: false
+
+        - sql:
+            sql: |
+              DO
+              $$
+              BEGIN
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${targetUser}') THEN
+                  CREATE USER ${targetUser} WITH PASSWORD '${targetPassword}';
+                END IF;
+              END
+              $$;
+            splitStatements: false
+            endDelimiter: ;
+
+        - sql:
+            sql: |
+              GRANT ALL PRIVILEGES ON DATABASE ${targetDatabase} TO ${targetUser};
+            splitStatements: false
+
+  - changeSet:
+      id: 1
+      author: mkorovaynyy
+      runOnChange: true
+      changes:
+        - createTable:
+            tableName: notification_task
+            columns:
+              - column:
+                  name: id
+                  type: BIGSERIAL
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: chat_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: message
+                  type: TEXT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: notification_date_time
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
